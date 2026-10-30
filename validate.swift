@@ -16,14 +16,13 @@
 
 import Foundation
 #if canImport(FoundationNetworking)
-import FoundationNetworking
+    import FoundationNetworking
 #endif
-
 
 // MARK: - Constants
 
 enum Constants {
-    static let githubPackageListURL = URL(string: "https://raw.githubusercontent.com/SwiftPackageIndex/PackageList/main/packages.json")!
+    static let githubPackageListURL = URL(string: "https://raw.githubusercontent.com/BrendanThompson/PackageList/main/packages.json")!
     static let githubToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"]
     static let manifestDirectory = ProcessInfo.processInfo.environment["SPI_MANIFEST_DIR"]
         .map { URL(fileURLWithPath: $0) }
@@ -45,26 +44,26 @@ enum AppError: Error {
 
     var localizedDescription: String {
         switch self {
-            case .invalidURL(let url):
-                return "invalid url: \(url)"
-            case .manifestDirectoryNotSet:
-                return "SPI_MANIFEST_DIR is not set. Manifests are fetched there for .github/evaluate_manifests.sh to evaluate, so set it to a directory that already exists."
-            case .manifestNotFound(let url):
-                return "no package manifest found at url: \(url)"
-            case .networkingError(let error):
-                return "networking error: \(error.localizedDescription)"
-            case .notFound(let url):
-                return "url not found (404): \(url)"
-            case .outputIdentical:
-                return "resulting package.json is unchanged. This typically means the package is already in the index."
-            case .packageListChanged:
-                return "package list was modified"
-            case .packageMoved:
-                return "package moved"
-            case let .rateLimitExceeded(url, limit):
-                return "rate limit of \(limit) exceeded while requesting url: \(url)"
-            case .syntaxError(let msg):
-                return msg
+        case let .invalidURL(url):
+            return "invalid url: \(url)"
+        case .manifestDirectoryNotSet:
+            return "SPI_MANIFEST_DIR is not set. Manifests are fetched there for .github/evaluate_manifests.sh to evaluate, so set it to a directory that already exists."
+        case let .manifestNotFound(url):
+            return "no package manifest found at url: \(url)"
+        case let .networkingError(error):
+            return "networking error: \(error.localizedDescription)"
+        case let .notFound(url):
+            return "url not found (404): \(url)"
+        case .outputIdentical:
+            return "resulting package.json is unchanged. This typically means the package is already in the index."
+        case .packageListChanged:
+            return "package list was modified"
+        case .packageMoved:
+            return "package moved"
+        case let .rateLimitExceeded(url, limit):
+            return "rate limit of \(limit) exceeded while requesting url: \(url)"
+        case let .syntaxError(msg):
+            return msg
         }
     }
 }
@@ -86,9 +85,9 @@ extension Sequence {
     }
 }
 
-// Ideally we'd be using Mutex from the Synchronization framework but it's causing
-// JIT session error: Symbols not found: [ __tlsdesc_resolver, __aarch64_cas4_rel, __aarch64_cas4_acq ]
-// errors on arm64 Linux (6.0.3-jammy).
+/// Ideally we'd be using Mutex from the Synchronization framework but it's causing
+/// JIT session error: Symbols not found: [ __tlsdesc_resolver, __aarch64_cas4_rel, __aarch64_cas4_acq ]
+/// errors on arm64 Linux (6.0.3-jammy).
 @dynamicMemberLookup
 public final class QueueIsolated<Value: Sendable>: @unchecked Sendable {
     private let _queue = DispatchQueue(label: "queue-isolated")
@@ -100,7 +99,7 @@ public final class QueueIsolated<Value: Sendable>: @unchecked Sendable {
     }
 
     public var value: Value {
-        get { _queue.sync { self._value } }
+        _queue.sync { self._value }
     }
 
     public subscript<Subject>(dynamicMember keyPath: KeyPath<Value, Subject>) -> Subject {
@@ -125,10 +124,10 @@ public final class QueueIsolated<Value: Sendable>: @unchecked Sendable {
 final class RedirectFollower: NSObject, URLSessionDataDelegate {
     let lastURL: QueueIsolated<URL?> = .init(nil)
     init(initialURL: URL) {
-        self.lastURL.setValue(initialURL)
+        lastURL.setValue(initialURL)
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+    func urlSession(_: URLSession, task _: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         if let url = request.url {
             lastURL.setValue(url)
         }
@@ -144,7 +143,7 @@ extension URL {
         let follower = RedirectFollower(initialURL: self)
         let session = URLSession(configuration: .default, delegate: follower, delegateQueue: nil)
 
-        let task = session.dataTask(with: self) { (_, response, error) in
+        let task = session.dataTask(with: self) { _, _, _ in
             semaphore.signal()
         }
 
@@ -165,14 +164,15 @@ func fetch(_ url: URL, timeout: TimeInterval = 10) async throws -> Data {
     }
 
     let session = URLSession(configuration: .default)
-    
+
     do {
         let (data, response) = try await session.data(for: request)
         let httpResponse = response as? HTTPURLResponse
-    
+
         if let limit = httpResponse?.value(forHTTPHeaderField: "X-RateLimit-Limit").flatMap(Int.init),
-        let remaining = httpResponse?.value(forHTTPHeaderField: "X-RateLimit-Remaining").flatMap(Int.init),
-        remaining == 0 {
+           let remaining = httpResponse?.value(forHTTPHeaderField: "X-RateLimit-Remaining").flatMap(Int.init),
+           remaining == 0
+        {
             throw AppError.rateLimitExceeded(url, reportedLimit: limit)
         } else if httpResponse?.statusCode == 404 {
             throw AppError.notFound(url)
@@ -258,7 +258,7 @@ func parseArgs(_ args: [String]) throws -> RunMode {
     guard
         urlString.starts(with: "https://"),
         let url = URL(string: urlString)
-        else { throw AppError.syntaxError("not a valid url: \(urlString)") }
+    else { throw AppError.syntaxError("not a valid url: \(urlString)") }
     return .processURL(url)
 }
 
@@ -305,11 +305,11 @@ func getManifestURLs(_ url: URL) async throws -> [URL] {
     let (owner, repository) = parseOwnerRepo(from: url)
     let branch = try await getDefaultBranch(owner: owner, repository: repository)
     let manifestFiles = try await listFilesInRepo(owner: owner, repository: repository, branch: branch)
-      .filter { $0.type == "blob" }
-      .filter { $0.path.hasPrefix("Package") }
-      .filter { $0.path.hasSuffix(".swift") }
-      .map(\.path)
-      .sorted()
+        .filter { $0.type == "blob" }
+        .filter { $0.path.hasPrefix("Package") }
+        .filter { $0.path.hasSuffix(".swift") }
+        .map(\.path)
+        .sorted()
     guard !manifestFiles.isEmpty else { throw AppError.manifestNotFound(url) }
     return manifestFiles.map {
         URL(string: "https://raw.githubusercontent.com/\(owner)/\(repository)/\(branch)/\($0)")!
@@ -318,7 +318,7 @@ func getManifestURLs(_ url: URL) async throws -> [URL] {
 
 // MARK: - Manifests
 
-// Once we've pulled the manifests we can hand them over to the evaluation step which can safely run 3rd party code. 
+/// Once we've pulled the manifests we can hand them over to the evaluation step which can safely run 3rd party code.
 func handOverManifests(of url: URL, to root: URL) async throws {
     let fm = FileManager.default
     let directory = root.appendingPathComponent(UUID().uuidString)
@@ -392,12 +392,12 @@ func processPackageList() async throws {
     let normalizedRemovals = removals.map { $0.normalized() }
 
     let newList = (
-            onlinePackageList
-                .map(\.absoluteString)
-                .filter { !normalizedRemovals.contains($0.normalized()) }
-                + additions
-        )
-        .sorted { $0.lowercased() < $1.lowercased() }
+        onlinePackageList
+            .map(\.absoluteString)
+            .filter { !normalizedRemovals.contains($0.normalized()) }
+            + additions
+    )
+    .sorted { $0.lowercased() < $1.lowercased() }
     let newListData: Data = try {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
@@ -429,14 +429,14 @@ func main(args: [String]) async throws {
     }
 
     switch try parseArgs(args) {
-        case .processURL(let url):
-            let resolvedURL = try await verifyURL(url)
-            if resolvedURL.absoluteString != url.absoluteString {
-                print("ℹ️  package moved: \(url) -> \(resolvedURL)")
-                throw AppError.packageMoved
-            }
-        case .processPackageList:
-            try await processPackageList()
+    case let .processURL(url):
+        let resolvedURL = try await verifyURL(url)
+        if resolvedURL.absoluteString != url.absoluteString {
+            print("ℹ️  package moved: \(url) -> \(resolvedURL)")
+            throw AppError.packageMoved
+        }
+    case .processPackageList:
+        try await processPackageList()
     }
     print("✅ validation succeeded")
     exit(EXIT_SUCCESS)
